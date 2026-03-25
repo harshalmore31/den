@@ -1,0 +1,790 @@
+openapi: 3.1.0
+info:
+  title: Den Agent API
+  description: |
+    The Den Agent API provides two layers:
+
+    **1. OpenAI-Compatible Layer** (`/v1/chat/completions`, `/v1/models`)
+    Drop-in compatible with OpenAI's API. Any client, SDK, or app that talks to
+    OpenAI can talk to a Den agent by changing the base URL. Supports streaming
+    via SSE (Server-Sent Events).
+
+    **2. Den-Native Layer** (`/den/v1/*`)
+    Den-specific operations: task triggering, memory inspection, loop execution,
+    output artifacts, scheduling, and agent lifecycle management.
+
+    Each Den agent runs this API on port 7700 inside its container, mapped to a
+    unique host port (7701, 7702, ...) via Docker.
+
+    ## Quick Start
+    ```bash
+    # Using curl (OpenAI-compatible)
+    curl http://localhost:7701/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{"messages": [{"role": "user", "content": "What were the top market movers today?"}]}'
+
+    # Using OpenAI Python SDK
+    from openai import OpenAI
+    client = OpenAI(base_url="http://localhost:7701/v1", api_key="not-needed")
+    response = client.chat.completions.create(
+        model="den-agent",
+        messages=[{"role": "user", "content": "What were the top market movers today?"}]
+    )
+
+    # Using Den-native API
+    curl http://localhost:7701/den/v1/trigger -d '{"task": "weekly-market-report"}'
+    ```
+  version: 1.0.0
+  contact:
+    name: Den
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:7701
+    description: Local Den agent (default port)
+
+tags:
+  - name: OpenAI Compatible
+    description: Drop-in replacement for OpenAI API — use any OpenAI client/SDK
+  - name: Den Native
+    description: Den-specific operations — tasks, memory, loops, artifacts
+  - name: Agent Lifecycle
+    description: Start, stop, and manage agent state
+
+# ============================================================================
+# PATHS
+# ============================================================================
+
+paths:
+
+  # --------------------------------------------------------------------------
+  # OPENAI-COMPATIBLE LAYER
+  # --------------------------------------------------------------------------
+
+  /v1/chat/completions:
+    post:
+      tags: [OpenAI Compatible]
+      summary: Chat completion (OpenAI-compatible)
+      description: |
+        Send a message to the Den agent and get a response. Follows the OpenAI
+        chat completions format exactly. The agent uses its configured tools,
+        memory, and system prompt to generate responses.
+
+        **Drop-in compatible:** Change your OpenAI base_url to point at a Den agent
+        and everything works. The agent's Agentfile system_prompt is used as the
+        system message (you can override by including a system message).
+
+        **Streaming:** Set `stream: true` for SSE streaming (same format as OpenAI).
+
+        **Tools:** The agent's Den tools are automatically available. You can also
+        pass additional tools in the request (OpenAI function calling format).
+      operationId: createChatCompletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatCompletionRequest'
+            examples:
+              simple:
+                summary: Simple message
+                value:
+                  messages:
+                    - role: user
+                      content: "What were the top market movers today?"
+              with_system:
+                summary: With system override
+                value:
+                  messages:
+                    - role: system
+                      content: "Respond in bullet points only."
+                    - role: user
+                      content: "Summarize this week's market trends."
+              streaming:
+                summary: Streaming response
+                value:
+                  messages:
+                    - role: user
+                      content: "Write a detailed market analysis."
+                  stream: true
+      responses:
+        '200':
+          description: Chat completion response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionResponse'
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ChatCompletionChunk'
+
+  /v1/models:
+    get:
+      tags: [OpenAI Compatible]
+      summary: List models (OpenAI-compatible)
+      description: |
+        Returns the model configured in the agent's Agentfile. Compatible with
+        OpenAI's model listing format so SDKs can discover available models.
+      operationId: listModels
+      responses:
+        '200':
+          description: Model list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelList'
+              example:
+                object: list
+                data:
+                  - id: "anthropic:claude-sonnet-4-6"
+                    object: model
+                    created: 1711900800
+                    owned_by: den-agent
+                    name: research-analyst
+
+  /v1/models/{model_id}:
+    get:
+      tags: [OpenAI Compatible]
+      summary: Retrieve model info
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Model info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Model'
+
+  # --------------------------------------------------------------------------
+  # DEN-NATIVE LAYER
+  # --------------------------------------------------------------------------
+
+  /den/v1/status:
+    get:
+      tags: [Den Native]
+      summary: Agent status
+      description: Returns current state, uptime, model, memory count, task stats.
+      responses:
+        '200':
+          description: Agent status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentStatus'
+
+  /den/v1/health:
+    get:
+      tags: [Den Native]
+      summary: Health check
+      responses:
+        '200':
+          description: Agent is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+
+  /den/v1/version:
+    get:
+      tags: [Den Native]
+      summary: Protocol and Den version
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  protocol:
+                    type: string
+                    example: "1.0"
+                  den:
+                    type: string
+                    example: "0.1.0"
+
+  /den/v1/ask:
+    post:
+      tags: [Den Native]
+      summary: Ask the agent (ad-hoc, no loop evaluation)
+      description: |
+        Send a message to the agent. Unlike `/v1/chat/completions`, this uses
+        the Den-native format and the agent has full access to its memory and
+        tools. No loop evaluation is applied — this is for quick queries.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  example: "What were the top 3 market movers today?"
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response:
+                    type: string
+                  files:
+                    type: array
+                    items:
+                      type: string
+
+  /den/v1/trigger:
+    post:
+      tags: [Den Native]
+      summary: Trigger a defined task (with Loop Architecture)
+      description: |
+        Fire a task defined in the Agentfile. The task goes through the full
+        Loop Architecture: phases → iterations → evaluation → feedback → retry.
+
+        Returns an SSE stream of progress events. Each event is a JSON object
+        with a `type` field indicating what happened.
+
+        **Event types:**
+        - `started` — task has begun
+        - `phase` — entering a new phase
+        - `iteration` — starting an iteration within a phase
+        - `evaluation` — check results for this iteration
+        - `feedback` — feedback generated for retry
+        - `artifact` — an artifact was produced
+        - `completed` — task finished successfully
+        - `failed` — task failed after exhausting retries
+        - `error` — unexpected error
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task]
+              properties:
+                task:
+                  type: string
+                  example: weekly-market-report
+      responses:
+        '200':
+          description: SSE stream of progress events
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/TaskProgressEvent'
+
+  /den/v1/tasks:
+    get:
+      tags: [Den Native]
+      summary: List defined tasks and schedules
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: object
+                    additionalProperties:
+                      $ref: '#/components/schemas/TaskInfo'
+                  schedules:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ScheduleInfo'
+
+  /den/v1/memory:
+    get:
+      tags: [Den Native]
+      summary: Query agent memory
+      description: |
+        Inspect the agent's persistent memory. Optionally search by semantic
+        similarity. Returns memory stats and matching entries.
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Semantic search query
+        - name: top_k
+          in: query
+          schema:
+            type: integer
+            default: 10
+          description: Max results to return
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  memories:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MemoryEntry'
+                  stats:
+                    $ref: '#/components/schemas/MemoryStats'
+
+  /den/v1/history:
+    get:
+      tags: [Den Native]
+      summary: Task execution history
+      parameters:
+        - name: task
+          in: query
+          schema:
+            type: string
+          description: Filter by task name
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  records:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HistoryRecord'
+
+  /den/v1/output:
+    get:
+      tags: [Den Native]
+      summary: List output artifacts
+      description: List all files in the agent's /den/output/ directory.
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/OutputFile'
+
+  /den/v1/output/{path}:
+    get:
+      tags: [Den Native]
+      summary: Download an output artifact
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          description: File path relative to /den/output/
+      responses:
+        '200':
+          description: File contents
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /den/v1/logs:
+    get:
+      tags: [Den Native]
+      summary: Agent logs
+      parameters:
+        - name: follow
+          in: query
+          schema:
+            type: boolean
+            default: false
+          description: Stream logs in real-time (SSE)
+        - name: lines
+          in: query
+          schema:
+            type: integer
+            default: 50
+          description: Number of recent lines (when not following)
+      responses:
+        '200':
+          description: Log lines or SSE stream
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lines:
+                    type: array
+                    items:
+                      type: string
+            text/event-stream:
+              schema:
+                type: object
+                properties:
+                  line:
+                    type: string
+
+  /den/v1/shutdown:
+    post:
+      tags: [Agent Lifecycle]
+      summary: Graceful shutdown
+      description: |
+        Shuts down the agent gracefully. Memory is preserved. The container
+        stops but the Den volume persists — `den up` will resume.
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  message:
+                    type: string
+
+# ============================================================================
+# SCHEMAS
+# ============================================================================
+
+components:
+  schemas:
+
+    # -- OpenAI-compatible schemas --
+
+    ChatCompletionRequest:
+      type: object
+      required: [messages]
+      properties:
+        model:
+          type: string
+          description: Ignored — uses the Agentfile model. Accepted for compatibility.
+          default: "den-agent"
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        stream:
+          type: boolean
+          default: false
+        temperature:
+          type: number
+          default: 1.0
+        max_tokens:
+          type: integer
+          default: 4096
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolDefinition'
+          description: Additional tools (on top of the agent's Den tools)
+        tool_choice:
+          type: string
+          enum: [auto, none, required]
+          default: auto
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool]
+        content:
+          type: string
+        name:
+          type: string
+        tool_call_id:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolCall'
+
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "den-cmpl-abc123"
+        object:
+          type: string
+          enum: [chat.completion]
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              message:
+                $ref: '#/components/schemas/ChatMessage'
+              finish_reason:
+                type: string
+                enum: [stop, tool_calls, length]
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+
+    ChatCompletionChunk:
+      type: object
+      description: SSE streaming chunk (same as OpenAI)
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum: [chat.completion.chunk]
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              delta:
+                type: object
+                properties:
+                  role:
+                    type: string
+                  content:
+                    type: string
+              finish_reason:
+                type: string
+                nullable: true
+
+    ToolDefinition:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [function]
+        function:
+          type: object
+          properties:
+            name:
+              type: string
+            description:
+              type: string
+            parameters:
+              type: object
+
+    ToolCall:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [function]
+        function:
+          type: object
+          properties:
+            name:
+              type: string
+            arguments:
+              type: string
+
+    ModelList:
+      type: object
+      properties:
+        object:
+          type: string
+          enum: [list]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Model'
+
+    Model:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Model identifier from Agentfile
+        object:
+          type: string
+          enum: [model]
+        created:
+          type: integer
+        owned_by:
+          type: string
+          default: den-agent
+        name:
+          type: string
+          description: Agent name from Agentfile
+
+    # -- Den-native schemas --
+
+    AgentStatus:
+      type: object
+      properties:
+        name:
+          type: string
+          example: research-analyst
+        state:
+          type: string
+          enum: [absent, booting, idle, running, stopping, stopped]
+          example: idle
+        model:
+          type: string
+          example: "anthropic:claude-sonnet-4-6"
+        uptime_seconds:
+          type: number
+          example: 7200.5
+        tasks_completed:
+          type: integer
+          example: 12
+        tasks_failed:
+          type: integer
+          example: 1
+        memory_count:
+          type: integer
+          example: 47
+        cron_tasks:
+          type: integer
+          example: 2
+        current_task:
+          type: string
+          example: ""
+
+    TaskInfo:
+      type: object
+      properties:
+        description:
+          type: string
+        complexity:
+          type: string
+          nullable: true
+          enum: [low, medium, high]
+        phases:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              type:
+                type: string
+        has_loop:
+          type: boolean
+
+    ScheduleInfo:
+      type: object
+      properties:
+        task:
+          type: string
+        schedule:
+          type: string
+          description: Cron expression
+          example: "0 9 * * MON"
+        next_fire:
+          type: string
+        last_run:
+          type: number
+        run_count:
+          type: integer
+
+    TaskProgressEvent:
+      type: object
+      description: SSE event during task execution
+      properties:
+        type:
+          type: string
+          enum: [started, phase, iteration, evaluation, feedback, artifact, completed, failed, error]
+        task:
+          type: string
+        phase:
+          type: string
+        iteration:
+          type: integer
+        checks:
+          type: object
+          description: Per-check pass/fail results
+        feedback:
+          type: string
+        artifact_path:
+          type: string
+        message:
+          type: string
+
+    MemoryEntry:
+      type: object
+      properties:
+        content:
+          type: string
+        category:
+          type: string
+          enum: [fact, preference, task_result, error, learned, progress]
+        relevance:
+          type: number
+          description: Cosine similarity score (0-1)
+        strength:
+          type: number
+          description: Memory strength (decays over time)
+
+    MemoryStats:
+      type: object
+      properties:
+        total:
+          type: integer
+        by_category:
+          type: object
+          additionalProperties:
+            type: integer
+        avg_strength:
+          type: number
+        tasks_recorded:
+          type: integer
+
+    OutputFile:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "weekly-report.md"
+        size_bytes:
+          type: integer
+          example: 14532
+        modified:
+          type: number
+          description: Unix timestamp
+
+    HistoryRecord:
+      type: object
+      properties:
+        task_name:
+          type: string
+        status:
+          type: string
+          enum: [success, failed, exhausted]
+        iterations:
+          type: integer
+        summary:
+          type: string
+        started_at:
+          type: number
+          description: Unix timestamp

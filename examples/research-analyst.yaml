@@ -1,0 +1,188 @@
+name: research-analyst
+model: openai:gpt-4o
+
+system_prompt: |
+  You are a research analyst specializing in market trends.
+  You work methodically, verify all sources, and produce
+  thorough reports. When you begin a task, read your memory
+  first. When you finish, write what you learned to memory.
+
+env:
+  ANTHROPIC_API_KEY: "$ANTHROPIC_API_KEY"
+
+tools:
+  - web_search
+  - file_read
+  - file_write
+  - csv_analyze
+  - pdf_read
+
+# Programmatic tool calling — agent writes Python code that
+# orchestrates multiple tool calls in one round-trip
+tool_execution:
+  mode: auto   # auto | programmatic | traditional
+
+bash:
+  enabled: true
+  allowed_commands: [python3, pip, curl, jq, pandoc]
+  blocked_commands: [rm -rf, sudo, chmod]
+  timeout: 60s
+
+memory:
+  max_size: 2gb
+
+cron:
+  - schedule: "0 9 * * MON"
+    task: weekly-market-report
+  - schedule: "*/30 * * * *"
+    task: check-news-alerts
+
+tasks:
+  weekly-market-report:
+    description: |
+      Generate this week's market report covering:
+      1. Key market movements
+      2. Notable company news
+      3. Upcoming events
+    complexity: high
+
+    phases:
+      - name: discovery
+        type: research
+        questions:
+          - id: market_movements
+            text: "What were the key market movements this week?"
+            required: true
+          - id: company_news
+            text: "What notable company news happened this week?"
+            required: true
+          - id: upcoming_events
+            text: "What important market events are coming next week?"
+            required: true
+        evaluation:
+          method: algorithmic
+          algorithmic_checks:
+            - name: all_answered
+              type: all_questions_addressed
+              min_words_per_answer: 100
+              required: true
+            - name: has_sources
+              type: sources_present
+              min_count: 3
+              required: true
+        max_iterations: 3
+        cooldown: 15s
+
+      - name: drafting
+        type: execution
+        input_from: discovery
+        description: |
+          Write the full weekly report using discovered information.
+          Save to /den/output/weekly-report.md
+        evaluation:
+          method: hybrid
+          algorithmic_checks:
+            - name: word_count
+              type: min_word_count
+              min_words: 800
+              required: true
+            - name: has_sections
+              type: sections_present
+              required_sections:
+                - "market movements"
+                - "company news"
+                - "upcoming events"
+              required: true
+            - name: no_placeholders
+              type: no_placeholder_text
+              required: true
+          qualitative_checks:
+            method: self-judge
+            criteria:
+              - "Report is well-organized with clear headers"
+              - "Analysis includes specific data points and percentages"
+            run_if_algorithmic_passes: true
+        artifacts:
+          - path: /den/output/weekly-report.md
+            type: markdown
+            required: true
+        max_iterations: 3
+        cooldown: 20s
+
+      - name: review
+        type: verification
+        input_from: [discovery, drafting]
+        evaluation:
+          method: hybrid
+          algorithmic_checks:
+            - name: report_exists
+              type: artifacts_exist
+              paths: [/den/output/weekly-report.md]
+              min_size_bytes: 500
+              required: true
+            - name: sources_cited
+              type: sources_present
+              min_count: 5
+              required: true
+          qualitative_checks:
+            method: self-judge
+            criteria:
+              - "All three sections from the plan are covered thoroughly"
+              - "No stale or outdated information"
+            run_if_algorithmic_passes: true
+        max_iterations: 2
+        transitions:
+          on_pass:
+            behavior: next
+          on_fail:
+            behavior: goto
+            goto: drafting
+            max_retries: 1
+
+    artifacts:
+      - path: /den/output/weekly-report.md
+        type: markdown
+
+  check-news-alerts:
+    description: |
+      Check for breaking market news. If significant,
+      write a brief to /den/output/alerts/.
+      If nothing notable, log "no alerts" to memory.
+    complexity: low
+
+    loop:
+      max_iterations: 2
+      evaluation:
+        method: algorithmic
+        algorithmic_checks:
+          - name: checked
+            type: min_word_count
+            min_words: 50
+            required: true
+      on_fail: notify
+      cooldown: 10s
+      context_budget:
+        memory_tokens: 300
+        feedback_tokens: 500
+        clear_tool_results: true
+
+    artifacts:
+      - path: /den/output/alerts/
+        type: directory
+        required: false
+
+permissions:
+  network:
+    - api.anthropic.com
+    - "*.reuters.com"
+    - "*.bloomberg.com"
+    - "*.yahoo.com"
+  filesystem:
+    - /den/workspace
+    - /den/output
+    - /den/memory
+
+resources:
+  cpu: "2.0"
+  memory: "4gb"
+  disk: "20gb"
