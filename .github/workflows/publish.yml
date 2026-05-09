@@ -46,9 +46,26 @@ jobs:
           name: dist
           path: dist/
 
+  verify-uv-build:
+    name: Verify uv can build the package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.11"
+
+      - name: Build sdist and wheel with uv
+        run: uv build
+
+      - name: Check distribution metadata
+        run: uvx twine check dist/*
+
   publish:
     name: Publish to PyPI
-    needs: build
+    needs: [build, verify-uv-build]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
