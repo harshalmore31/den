@@ -6,12 +6,13 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,28 @@ app = FastAPI(
     version="1.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def bearer_token_auth(request, call_next):
+    """Optional bearer token auth via DEN_API_KEY env var.
+
+    If unset/empty, the server is open (backward compatible).
+    If set, every request except /den/v1/health requires
+    Authorization: Bearer <DEN_API_KEY>.
+    """
+    expected = os.environ.get("DEN_API_KEY")
+    if not expected:
+        return await call_next(request)
+    if request.url.path == "/den/v1/health":
+        return await call_next(request)
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"error": "Missing bearer token"})
+    if not secrets.compare_digest(auth[7:].strip(), expected):
+        return JSONResponse(status_code=401, content={"error": "Invalid bearer token"})
+    return await call_next(request)
+
 
 from den.server.openai_compat import router as openai_router, set_refs as set_openai_refs
 app.include_router(openai_router)
