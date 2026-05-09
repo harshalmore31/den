@@ -84,3 +84,9 @@ keys.enc
 memory.db
 *.db-shm
 *.db-wal
+
+# -----------------------------------------------------------------------------
+# Local-only working files (not part of the public repo)
+# -----------------------------------------------------------------------------
+HARSHAL.md
+research/

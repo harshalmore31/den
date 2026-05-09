@@ -3,20 +3,22 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "den-core"
-version = "0.1.0"
-description = "Den agent runtime — runs inside containers (use @den/cli for the user-facing CLI)"
+name = "den-agent"
+version = "0.1.0a1"
+description = "Den — the living runtime for AI agents. Persistent home, memory, self-evaluating loops, cron, and identity in one framework."
 readme = "README.md"
-license = "MIT"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 authors = [
-    { name = "Harshal More" },
+    { name = "Harshal More", email = "harshalmore2468@gmail.com" },
 ]
-keywords = ["ai", "agents", "sandbox", "runtime", "docker", "llm"]
+keywords = ["ai", "agents", "agent-framework", "sandbox", "runtime", "docker", "llm", "memory", "loop"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -77,6 +79,12 @@ dev = [
 # den-agent-process runs inside Docker containers only.
 [project.scripts]
 den-agent-process = "den.core.agent_process:main"
+
+[project.urls]
+Homepage = "https://github.com/harshalmore31/den"
+Repository = "https://github.com/harshalmore31/den"
+Issues = "https://github.com/harshalmore31/den/issues"
+Documentation = "https://github.com/harshalmore31/den#readme"
 
 [tool.setuptools.packages.find]
 where = ["."]

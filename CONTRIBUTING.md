@@ -11,7 +11,7 @@ Thanks for your interest in contributing to Den. This guide will help you get se
 
 ## Development Setup
 
-### 1. Clone and set up Python (den-core)
+### 1. Clone and set up Python (den-agent)
 
 ```bash
 git clone https://github.com/harshalmore31/Den.git
