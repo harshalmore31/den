@@ -700,7 +700,7 @@ program
 
 program
   .command("output <agent>")
-  .description("List agent output artifacts")
+  .description("List agent output artifacts (alias of: den ls)")
   .action(async (agentName: string) => {
     const client = getClientForAgent(agentName);
     if (!client) {
@@ -722,6 +722,95 @@ program
       }
     } catch (e: any) {
       console.error(`Error: ${e.message}`);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// den ls <agent> — alias of `den output` (lists files in /den/output)
+// ---------------------------------------------------------------------------
+
+program
+  .command("ls <agent>")
+  .description("List files in the agent's /den/output (artifacts)")
+  .action(async (agentName: string) => {
+    const client = getClientForAgent(agentName);
+    if (!client) {
+      console.error(`Agent '${agentName}' not found.`);
+      process.exit(1);
+    }
+    try {
+      const out = await client.output();
+      if (out.files.length === 0) {
+        console.log("(no artifacts in /den/output)");
+        return;
+      }
+      const c = { reset: "\x1b[0m", dim: "\x1b[2m", bold: "\x1b[1m" };
+      for (const f of out.files) {
+        const size = f.size_bytes < 1024
+          ? `${f.size_bytes} B`
+          : f.size_bytes < 1024 * 1024
+            ? `${(f.size_bytes / 1024).toFixed(1)} KB`
+            : `${(f.size_bytes / 1024 / 1024).toFixed(1)} MB`;
+        const date = new Date(f.modified * 1000).toISOString().replace("T", " ").slice(0, 19);
+        console.log(`  ${c.bold}${f.name.padEnd(36)}${c.reset} ${size.padStart(10)}  ${c.dim}${date}${c.reset}`);
+      }
+    } catch (e: any) {
+      console.error(`Error: ${e.message}`);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// den pull <agent> <remote-path> [<local-path>] — download an artifact
+// ---------------------------------------------------------------------------
+
+program
+  .command("pull <agent> <remotePath> [localPath]")
+  .description("Download an artifact from agent's /den/output to your machine")
+  .action(async (agentName: string, remotePath: string, localPath?: string) => {
+    const client = getClientForAgent(agentName);
+    if (!client) {
+      console.error(`Agent '${agentName}' not found.`);
+      process.exit(1);
+    }
+    // Strip any /den/output/ prefix if user pasted the absolute path
+    const cleaned = remotePath.replace(/^\/+den\/+output\/+/, "").replace(/^\/+/, "");
+    // Default local path: basename of remote, in cwd
+    const { basename, resolve } = await import("path");
+    const target = resolve(localPath ?? basename(cleaned));
+    const { writeFileSync } = await import("fs");
+
+    try {
+      const buf = await client.downloadOutputBinary(cleaned);
+      writeFileSync(target, Buffer.from(buf));
+      const sizeKb = (buf.byteLength / 1024).toFixed(1);
+      console.log(`  \x1b[32m✓\x1b[0m ${cleaned} → ${target} (${sizeKb} KB)`);
+    } catch (e: any) {
+      console.error(`  \x1b[31m✗\x1b[0m ${e.message}`);
+      process.exit(1);
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// den cat <agent> <path> — print file contents to stdout (text only)
+// ---------------------------------------------------------------------------
+
+program
+  .command("cat <agent> <remotePath>")
+  .description("Print an artifact from agent's /den/output to stdout")
+  .action(async (agentName: string, remotePath: string) => {
+    const client = getClientForAgent(agentName);
+    if (!client) {
+      console.error(`Agent '${agentName}' not found.`);
+      process.exit(1);
+    }
+    const cleaned = remotePath.replace(/^\/+den\/+output\/+/, "").replace(/^\/+/, "");
+    try {
+      const text = await client.downloadOutput(cleaned);
+      process.stdout.write(text);
+      if (!text.endsWith("\n")) process.stdout.write("\n");
+    } catch (e: any) {
+      console.error(`Error: ${e.message}`);
+      process.exit(1);
     }
   });
 
