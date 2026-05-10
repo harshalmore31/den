@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from difflib import get_close_matches
 from typing import Any
 
 from den.tools._base import DenTool, ToolSpec
@@ -36,16 +37,41 @@ class ToolRegistry:
         return [t.get_spec() for t in self._tools.values()]
 
     def load_tools(self, tool_names: list[str]) -> dict[str, DenTool]:
-        """Load a subset of tools by name (as declared in Agentfile)."""
-        loaded = {}
+        """Load a subset of tools by name (as declared in Agentfile).
+
+        Raises ValueError listing every unknown name at once (not one at a
+        time) and includes a "did you mean ..." suggestion for each typo
+        based on the closest registered tool name.
+        """
+        loaded: dict[str, DenTool] = {}
+        unknown: list[tuple[str, list[str]]] = []
         for name in tool_names:
             tool = self._tools.get(name)
             if tool is None:
-                available = ", ".join(self.list_tools())
-                raise ValueError(
-                    f"Unknown tool '{name}'. Available tools: {available}"
-                )
+                suggestions = get_close_matches(name, self.list_tools(), n=2, cutoff=0.5)
+                unknown.append((name, suggestions))
+                continue
             loaded[name] = tool
+
+        if unknown:
+            available = ", ".join(self.list_tools())
+            lines = [
+                f"Agentfile references {len(unknown)} unknown tool"
+                f"{'s' if len(unknown) > 1 else ''}:",
+            ]
+            for name, suggestions in unknown:
+                hint = (
+                    f"  - '{name}' "
+                    + (
+                        f"(did you mean '{suggestions[0]}'?)"
+                        if suggestions
+                        else "(no close match)"
+                    )
+                )
+                lines.append(hint)
+            lines.append(f"Available tools: {available}")
+            raise ValueError("\n".join(lines))
+
         return loaded
 
     def get_callables(self, tool_names: list[str]) -> dict[str, Any]:

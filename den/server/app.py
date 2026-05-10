@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -49,6 +50,25 @@ app = FastAPI(
     description="Den Protocol API",
     version="1.0",
     lifespan=lifespan,
+)
+
+
+# CORS -- configurable via DEN_ALLOWED_ORIGINS env (comma-separated).
+# Defaults to "*" so dev/curl/studio-direct calls Just Work. In production
+# behind a reverse proxy or Worker (where only same-origin matters), set
+# DEN_ALLOWED_ORIGINS to a tight list to lock the agent down.
+_origins_env = os.environ.get("DEN_ALLOWED_ORIGINS", "*").strip()
+_allowed_origins: list[str] = (
+    ["*"] if _origins_env in ("*", "") else [o.strip() for o in _origins_env.split(",") if o.strip()]
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=False,  # bearer tokens, no cookies -- credentials false is correct
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,
 )
 
 
