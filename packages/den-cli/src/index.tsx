@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 /**
  * Den CLI — The living runtime for AI agents.
  *
@@ -62,14 +60,15 @@ program
           <Banner />
           <AgentList agents={agents} />
           <HelpCommands commands={[
-            { cmd: "den up <agentfile>", desc: "Start an agent in Docker" },
-            { cmd: "den connect <agent>", desc: "Interactive chat session" },
+            { cmd: "den up <agentfile>", desc: "Start a local agent in Docker" },
+            { cmd: "den remote add <name> <url>", desc: "Register a deployed agent (bearer token)" },
+            { cmd: "den connect <agent>", desc: "Interactive chat session (local or remote)" },
             { cmd: "den ask <agent> \"msg\"", desc: "Quick question" },
             { cmd: "den trigger <agent> <task>", desc: "Fire a task with Loop Architecture" },
-            { cmd: "den list", desc: "Show all agents on this device" },
+            { cmd: "den list", desc: "Show all agents (local + remote)" },
             { cmd: "den auth <provider>", desc: "Set API keys (openai, anthropic, brave)" },
             { cmd: "den inspect <file>", desc: "Security analysis of Agentfile" },
-            { cmd: "den down <agent>", desc: "Stop an agent" },
+            { cmd: "den down <agent>", desc: "Stop an agent (or unregister remote)" },
           ]} />
         </Box>
       );
@@ -363,9 +362,9 @@ program
         process.stdout.write("\r\x1b[K");  // clear spinner line
 
         // Show tool calls if any
-        if (result.tool_calls?.length > 0) {
+        if ((result.tool_calls?.length ?? 0) > 0) {
           console.log(`  ${c.dim}─── tool execution ───${c.reset}`);
-          for (const tc of result.tool_calls) {
+          for (const tc of result.tool_calls!) {
             // Distinguish: real error vs empty result
             const hasRealError = tc.status === "error" && tc.error &&
               !tc.error.includes("validation error");
@@ -802,13 +801,20 @@ program
 
 program
   .command("down <agent>")
-  .description("Stop a running agent")
+  .description("Stop a running agent (local Docker only — use 'den remote rm' for remote)")
   .action(async (agentName: string) => {
     const registry = readRegistry();
     const info = registry[agentName];
 
     if (!info) {
       console.error(`Agent '${agentName}' not found. Run 'den list' to see agents.`);
+      process.exit(1);
+    }
+
+    if (info.remote) {
+      console.error(`'${agentName}' is a remote agent — Den can't shut down a deployed service.`);
+      console.error(`To unregister it locally: den remote rm ${agentName}`);
+      console.error(`To stop the deployed agent itself: stop the service in your hosting dashboard.`);
       process.exit(1);
     }
 
@@ -837,9 +843,53 @@ program
 // den inspect <agentfile> — security analysis (local, no running agent needed)
 // ---------------------------------------------------------------------------
 
+// Canonical tool names registered by den-agent. Update when den-agent adds tools.
+// (Source: github.com/harshalmore31/den/tree/main/den/tools)
+const KNOWN_TOOLS = [
+  "bash",
+  "csv_analyze",
+  "file_list",
+  "file_read",
+  "file_write",
+  "http_get",
+  "json_parse",
+  "pdf_read",
+  "python_exec",
+  "web_context",
+  "web_search",
+];
+
+// Levenshtein distance for did-you-mean suggestions
+function editDistance(a: string, b: string): number {
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const m = a.length, n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1]
+        : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+    }
+  }
+  return dp[m][n];
+}
+
+function suggestTool(unknown: string): string | null {
+  const candidates = KNOWN_TOOLS
+    .map((t) => ({ t, d: editDistance(unknown, t) }))
+    .sort((a, b) => a.d - b.d);
+  if (!candidates.length) return null;
+  const best = candidates[0];
+  // Only suggest if reasonably close (<=3 edits OR shorter-name 50% match)
+  return best.d <= 3 || best.d <= unknown.length / 2 ? best.t : null;
+}
+
 program
   .command("inspect <agentfile>")
-  .description("Analyze security posture of an Agentfile")
+  .description("Validate + analyze security posture of an Agentfile (run BEFORE deploy)")
   .action(async (agentfile: string) => {
     if (!existsSync(agentfile)) {
       console.error(`  Error: ${agentfile} not found`);
@@ -853,16 +903,25 @@ program
       cyan: "\x1b[36m", green: "\x1b[32m", yellow: "\x1b[33m", red: "\x1b[31m",
     };
 
-    console.log(`\n  ${c.cyan}${c.bold}Den Agentfile Security Analysis${c.reset}`);
+    console.log(`\n  ${c.cyan}${c.bold}Den Agentfile Inspection${c.reset}`);
     console.log(`  ${"═".repeat(40)}`);
     console.log(`  ${c.dim}Agent:${c.reset}    ${c.bold}${config.name}${c.reset}`);
     console.log(`  ${c.dim}Model:${c.reset}    ${config.model}`);
     console.log();
 
-    // Tools
+    // Validate tool names against known registry
+    const tools: string[] = config.tools || [];
+    const unknown: { name: string; suggestion: string | null }[] = [];
     console.log(`  ${c.cyan}Tools:${c.reset}`);
-    for (const tool of (config.tools || [])) {
-      console.log(`    ${c.green}[ALLOWED]${c.reset}  ${tool}`);
+    for (const tool of tools) {
+      if (KNOWN_TOOLS.includes(tool)) {
+        console.log(`    ${c.green}[ OK ]${c.reset}     ${tool}`);
+      } else {
+        const suggestion = suggestTool(tool);
+        unknown.push({ name: tool, suggestion });
+        const hint = suggestion ? ` ${c.yellow}(did you mean '${suggestion}'?)${c.reset}` : "";
+        console.log(`    ${c.red}[UNKNOWN]${c.reset}  ${tool}${hint}`);
+      }
     }
     console.log();
 
@@ -917,6 +976,16 @@ program
       console.log(`  ${c.green}Risk: LOW${c.reset}`);
     }
     console.log();
+
+    // Final verdict -- exits non-zero if there are blocking issues so this can
+    // gate a CI step (e.g. `den inspect agentfile.yaml && git push`)
+    if (unknown.length) {
+      console.log(`  ${c.red}${c.bold}✗ ${unknown.length} unknown tool name${unknown.length > 1 ? "s" : ""} -- container would crash on boot.${c.reset}`);
+      console.log(`  ${c.dim}Available tools: ${KNOWN_TOOLS.join(", ")}${c.reset}`);
+      console.log();
+      process.exit(1);
+    }
+    console.log(`  ${c.green}${c.bold}✓ Agentfile is valid${c.reset}\n`);
   });
 
 // ---------------------------------------------------------------------------
@@ -1010,6 +1079,174 @@ resources:
     writeFileSync(filename, content);
     console.log(`\n  ✓ Created: ${filename}`);
     console.log(`  Next: den up ${filename}`);
+  });
+
+// ---------------------------------------------------------------------------
+// den remote — manage deployed (Northflank/CF/etc.) agents over the network
+// ---------------------------------------------------------------------------
+
+const remote = program.command("remote").description("Manage remote (deployed) agents");
+
+remote
+  .command("add <name> <url>")
+  .description("Register a deployed agent — prompts for bearer token")
+  .option("--token <token>", "Pass bearer token inline (skips prompt)")
+  .option("--no-verify", "Skip the live health/auth check after registering")
+  .action(async (name: string, url: string, opts: { token?: string; verify: boolean }) => {
+    const c = {
+      reset: "\x1b[0m", bold: "\x1b[1m", dim: "\x1b[2m",
+      cyan: "\x1b[36m", green: "\x1b[32m", yellow: "\x1b[33m", red: "\x1b[31m",
+    };
+
+    // Validate name (kebab-case to match Den agentfile rules)
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+      console.error(`  ${c.red}✗ Name must be kebab-case (lowercase, digits, hyphens): got '${name}'${c.reset}`);
+      process.exit(1);
+    }
+
+    // Validate + normalize URL
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      console.error(`  ${c.red}✗ Not a valid URL: ${url}${c.reset}`);
+      process.exit(1);
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      console.error(`  ${c.red}✗ URL must be http(s): got ${parsed.protocol}${c.reset}`);
+      process.exit(1);
+    }
+    const cleanUrl = parsed.origin;
+
+    // Get token: --token flag, env var, or interactive prompt
+    let token = opts.token ?? process.env.DEN_API_KEY ?? "";
+    if (!token) {
+      const readline = await import("readline");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      token = await new Promise<string>((resolve) => {
+        rl.question(`  ${c.cyan}🔑${c.reset} Bearer token for ${c.bold}${name}${c.reset} (DEN_API_KEY): `, (a: string) => {
+          rl.close();
+          resolve(a.trim());
+        });
+      });
+    }
+    if (!token) {
+      console.error(`  ${c.red}✗ No token provided.${c.reset}`);
+      process.exit(1);
+    }
+
+    const { saveAgentToken } = await import("./protocol/keystore.js");
+    const { registerRemoteAgent, readRegistry } = await import("./protocol/discovery.js");
+
+    // Warn if overwriting
+    const existing = readRegistry()[name];
+    if (existing) {
+      console.log(`  ${c.yellow}⚠${c.reset}  Overwriting existing agent '${name}' (was: ${existing.url ?? `:${existing.port}`})`);
+    }
+
+    saveAgentToken(name, token);
+    registerRemoteAgent(name, cleanUrl);
+
+    const masked = token.slice(0, 6) + "•".repeat(8) + token.slice(-4);
+    console.log(`\n  ${c.green}✓${c.reset} Registered ${c.bold}${name}${c.reset}`);
+    console.log(`    ${c.dim}URL:${c.reset}    ${cleanUrl}`);
+    console.log(`    ${c.dim}Token:${c.reset}  ${masked} ${c.dim}(encrypted at ~/.den/keys.enc)${c.reset}`);
+
+    if (opts.verify !== false) {
+      const { getClientForAgent } = await import("./protocol/discovery.js");
+      const client = getClientForAgent(name);
+      if (!client) {
+        console.error(`  ${c.red}✗ Could not build client (internal error)${c.reset}`);
+        process.exit(1);
+      }
+      try {
+        process.stdout.write(`\n  ${c.dim}Verifying...${c.reset} `);
+        const alive = await client.health();
+        if (!alive) {
+          console.log(`${c.red}✗ health endpoint not reachable${c.reset}`);
+          console.log(`  ${c.dim}URL still saved -- fix the agent and retry 'den connect ${name}'${c.reset}`);
+          process.exit(1);
+        }
+        const status = await client.status();
+        console.log(`${c.green}✓${c.reset}`);
+        console.log(`    ${c.dim}Agent:${c.reset}  ${status.name ?? name}`);
+        console.log(`    ${c.dim}Model:${c.reset}  ${status.model ?? "?"}`);
+        console.log(`    ${c.dim}State:${c.reset}  ${status.state ?? "?"}`);
+        console.log(`    ${c.dim}Memory:${c.reset} ${status.memory_count ?? 0} entries`);
+        console.log(`\n  ${c.cyan}→${c.reset} ${c.bold}den connect ${name}${c.reset}`);
+      } catch (err) {
+        console.log(`${c.red}✗${c.reset}`);
+        console.log(`  ${c.red}${(err as Error).message}${c.reset}`);
+        console.log(`  ${c.dim}Token may be wrong. Re-add with: den remote add ${name} ${cleanUrl}${c.reset}`);
+        process.exit(1);
+      }
+    }
+  });
+
+remote
+  .command("list")
+  .description("List all remote agents")
+  .action(async () => {
+    const { listAgentTokens } = await import("./protocol/keystore.js");
+    const { readRegistry } = await import("./protocol/discovery.js");
+
+    const registry = readRegistry();
+    const tokens = new Map(listAgentTokens().map((t) => [t.name, t.masked]));
+    const remotes = Object.values(registry).filter((a) => a.remote);
+
+    if (remotes.length === 0) {
+      console.log("\n  No remote agents registered.");
+      console.log("  Add one: den remote add <name> <url>\n");
+      return;
+    }
+
+    const c = { reset: "\x1b[0m", bold: "\x1b[1m", dim: "\x1b[2m", cyan: "\x1b[36m" };
+    console.log(`\n  ${c.cyan}${c.bold}Remote agents${c.reset}`);
+    for (const a of remotes) {
+      console.log(`    ${c.bold}${a.name.padEnd(22)}${c.reset} ${(a.url ?? "—").padEnd(40)} ${c.dim}${tokens.get(a.name) ?? "no-token"}${c.reset}`);
+    }
+    console.log();
+  });
+
+remote
+  .command("rm <name>")
+  .description("Remove a remote agent and its bearer token")
+  .action(async (name: string) => {
+    const { unregisterAgent } = await import("./protocol/discovery.js");
+    unregisterAgent(name); // also wipes the agent token via discovery.ts
+    console.log(`\n  ✓ Removed remote agent '${name}' and its bearer token.\n`);
+  });
+
+remote
+  .command("token <name>")
+  .description("Replace the bearer token for a registered remote agent")
+  .option("--token <token>", "Pass bearer token inline (skips prompt)")
+  .action(async (name: string, opts: { token?: string }) => {
+    const { readRegistry } = await import("./protocol/discovery.js");
+    const { saveAgentToken } = await import("./protocol/keystore.js");
+    const info = readRegistry()[name];
+    if (!info || !info.remote) {
+      console.error(`  No remote agent named '${name}'. List with: den remote list`);
+      process.exit(1);
+    }
+
+    let token = opts.token ?? "";
+    if (!token) {
+      const readline = await import("readline");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      token = await new Promise<string>((resolve) => {
+        rl.question(`  🔑 New bearer token for ${name}: `, (a: string) => {
+          rl.close();
+          resolve(a.trim());
+        });
+      });
+    }
+    if (!token) {
+      console.error(`  ✗ No token provided.`);
+      process.exit(1);
+    }
+    saveAgentToken(name, token);
+    console.log(`\n  ✓ Token updated for '${name}'.\n`);
   });
 
 // ---------------------------------------------------------------------------
