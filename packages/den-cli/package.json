@@ -1,7 +1,7 @@
 {
-  "name": "@harshalmore31/den",
+  "name": "den-agent",
   "version": "0.1.0-alpha.2",
-  "description": "Den CLI — the living runtime for AI agents. Connects to local Docker agents and remote deployed agents (Northflank, Cloudflare, etc.) over a single CLI.",
+  "description": "Den CLI — the living runtime for AI agents. Connects to local Docker agents and remote deployed agents (Northflank, Cloudflare, etc.) from one terminal. Pairs with the den-agent Python runtime on PyPI.",
   "type": "module",
   "license": "Apache-2.0",
   "author": {
@@ -39,7 +39,6 @@
     "LICENSE"
   ],
   "publishConfig": {
-    "access": "public",
     "provenance": true
   },
   "scripts": {
