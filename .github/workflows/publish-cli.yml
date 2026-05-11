@@ -30,8 +30,14 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "22.14.0"   # explicit -- trusted publishing needs npm 11.5.1+
           registry-url: "https://registry.npmjs.org/"
+
+      - name: Force latest npm (trusted publishing needs >= 11.5.1)
+        run: |
+          npm install -g npm@latest
+          echo "node: $(node --version)"
+          echo "npm:  $(npm --version)"
 
       - name: Verify tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/cli-v')
@@ -57,4 +63,14 @@ jobs:
         run: npm pack --dry-run
 
       - name: Publish to npm (OIDC + auto-provenance)
-        run: npm publish
+        run: |
+          echo "=== Publish context ==="
+          echo "Repo:      $GITHUB_REPOSITORY"
+          echo "Ref:       $GITHUB_REF"
+          echo "Workflow:  $GITHUB_WORKFLOW"
+          echo "Workflow file: ${GITHUB_WORKFLOW_REF##*/}"
+          echo "Run ID:    $GITHUB_RUN_ID"
+          echo "Actor:     $GITHUB_ACTOR"
+          echo "npm whoami: $(npm whoami 2>&1 || echo 'not authenticated (expected for OIDC)')"
+          echo "======================="
+          npm publish
