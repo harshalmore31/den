@@ -5,19 +5,9 @@ name: Publish den-agent to npm
 # short-lived publish token on each run. Provenance auto-attaches because
 # (a) the repo is public and (b) we're publishing via trusted publishing.
 #
-# Requirements:
-#   - Node >= 22.14.0 (npm CLI 11.5.1+) -- mandatory for trusted publishing
-#   - id-token: write permission on the publish job (OIDC handshake)
-#   - Trusted Publisher registered on npmjs.com PER-PACKAGE -- so a one-time
-#     bootstrap publish (e.g. `npm publish --otp <code>`) must happen before
-#     this workflow can take over. After that one publish, configure the
-#     trusted publisher at npmjs.com/package/den-agent/access.
-#
-# Hardening (add after bootstrap):
-#   - Create a GitHub environment named 'npm' (Settings -> Environments)
-#     and uncomment the `environment: npm` line below for an extra gate.
-#   - On npmjs.com, set "Require 2FA and disallow tokens" once trusted
-#     publishing is verified working.
+# Single-job structure (matches the official docs example) because the
+# two-job artifact roundtrip didn't preserve node_modules/.bin reliably,
+# breaking prepublishOnly's call to esbuild.
 
 on:
   push:
@@ -26,9 +16,12 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build distribution
+  publish:
+    name: Publish via npm Trusted Publisher (OIDC)
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write     # OIDC handshake with npm (mandatory)
+      contents: read
     defaults:
       run:
         working-directory: packages/den-cli
@@ -62,38 +55,6 @@ jobs:
 
       - name: Pack to verify tarball shape
         run: npm pack --dry-run
-
-      - name: Upload built package
-        uses: actions/upload-artifact@v4
-        with:
-          name: den-cli-package
-          path: packages/den-cli/
-
-  publish:
-    name: Publish via npm Trusted Publisher (OIDC)
-    needs: build
-    runs-on: ubuntu-latest
-    # environment: npm    # uncomment after creating the 'npm' environment in repo settings
-    permissions:
-      id-token: write     # OIDC handshake with npm (mandatory)
-      contents: read
-    defaults:
-      run:
-        working-directory: packages/den-cli
-    steps:
-      - name: Download built package
-        uses: actions/download-artifact@v4
-        with:
-          name: den-cli-package
-          path: packages/den-cli/
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org/"
-
-      - name: Restore CLI executable bit (lost in artifact roundtrip)
-        run: chmod +x dist/cli.mjs
 
       - name: Publish to npm (OIDC + auto-provenance)
         run: npm publish
