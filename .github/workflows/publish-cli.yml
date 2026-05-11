@@ -8,8 +8,16 @@ name: Publish den-agent to npm
 # Requirements:
 #   - Node >= 22.14.0 (npm CLI 11.5.1+) -- mandatory for trusted publishing
 #   - id-token: write permission on the publish job (OIDC handshake)
-#   - Trusted Publisher registered on npmjs.com pointing at this exact
-#     workflow filename + 'npm' environment
+#   - Trusted Publisher registered on npmjs.com PER-PACKAGE -- so a one-time
+#     bootstrap publish (e.g. `npm publish --otp <code>`) must happen before
+#     this workflow can take over. After that one publish, configure the
+#     trusted publisher at npmjs.com/package/den-agent/access.
+#
+# Hardening (add after bootstrap):
+#   - Create a GitHub environment named 'npm' (Settings -> Environments)
+#     and uncomment the `environment: npm` line below for an extra gate.
+#   - On npmjs.com, set "Require 2FA and disallow tokens" once trusted
+#     publishing is verified working.
 
 on:
   push:
@@ -31,7 +39,6 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org/"
-          package-manager-cache: false   # never cache in release builds
 
       - name: Verify tag matches package.json version
         if: startsWith(github.ref, 'refs/tags/cli-v')
@@ -61,13 +68,12 @@ jobs:
         with:
           name: den-cli-package
           path: packages/den-cli/
-          include-hidden-files: false
 
   publish:
     name: Publish via npm Trusted Publisher (OIDC)
     needs: build
     runs-on: ubuntu-latest
-    environment: npm
+    # environment: npm    # uncomment after creating the 'npm' environment in repo settings
     permissions:
       id-token: write     # OIDC handshake with npm (mandatory)
       contents: read
@@ -85,7 +91,6 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org/"
-          package-manager-cache: false
 
       - name: Restore CLI executable bit (lost in artifact roundtrip)
         run: chmod +x dist/cli.mjs
