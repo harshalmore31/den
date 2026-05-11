@@ -14,12 +14,23 @@ export interface AgentStatus {
   current_task: string;
 }
 
+/**
+ * AgentInfo covers two shapes:
+ *   - Local (Docker): port + container_id are set, remote=false (or absent)
+ *   - Remote (Northflank/CF/etc.): url is set, remote=true; bearer token
+ *     for the agent lives in the encrypted keystore under `_agent:<name>`,
+ *     never in this file.
+ */
 export interface AgentInfo {
   name: string;
-  port: number;
-  container_id: string;
   status: string;
   started_at: string;
+  // Local-Docker fields
+  port?: number;
+  container_id?: string;
+  // Remote fields
+  url?: string;
+  remote?: boolean;
 }
 
 export interface AgentRegistry {

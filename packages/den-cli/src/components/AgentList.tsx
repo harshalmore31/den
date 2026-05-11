@@ -4,7 +4,9 @@ import { Separator, StatusDot } from "./Banner.js";
 
 interface Agent {
   name: string;
-  port: number;
+  port?: number;
+  url?: string;
+  remote?: boolean;
   live: boolean;
   liveStatus?: {
     state: string;
@@ -25,17 +27,32 @@ function formatUptime(s: number): string {
   return h < 24 ? `${h}h${m}m` : `${Math.floor(s / 86400)}d`;
 }
 
+function locationLabel(agent: Agent): string {
+  if (agent.remote && agent.url) {
+    try {
+      return new URL(agent.url).host;
+    } catch {
+      return agent.url;
+    }
+  }
+  if (typeof agent.port === "number") return `:${agent.port}`;
+  return "—";
+}
+
 export function AgentList({ agents }: { agents: Agent[] }) {
   if (agents.length === 0) {
     return (
       <Box flexDirection="column" paddingLeft={2}>
-        <Text dimColor>No agents running.</Text>
+        <Text dimColor>No agents registered.</Text>
         <Box marginTop={1} flexDirection="column">
           <Text dimColor>Quick start:</Text>
-          <Text>  <Text color="cyan">1.</Text> <Text color="white">den auth openai</Text>       <Text dimColor>Set your API key</Text></Text>
-          <Text>  <Text color="cyan">2.</Text> <Text color="white">den init</Text>              <Text dimColor>Create an Agentfile</Text></Text>
-          <Text>  <Text color="cyan">3.</Text> <Text color="white">den up Agentfile</Text>      <Text dimColor>Start the agent</Text></Text>
-          <Text>  <Text color="cyan">4.</Text> <Text color="white">den connect my-agent</Text>  <Text dimColor>Chat with it</Text></Text>
+          <Text>  <Text color="cyan">A.</Text> <Text color="white">den auth openai</Text>                          <Text dimColor>Set your API key</Text></Text>
+          <Text>  <Text color="cyan">  </Text> <Text color="white">den init</Text>                                 <Text dimColor>Create an Agentfile</Text></Text>
+          <Text>  <Text color="cyan">  </Text> <Text color="white">den up Agentfile</Text>                         <Text dimColor>Start a local agent</Text></Text>
+          <Text>  <Text color="cyan">  </Text> <Text color="white">den connect my-agent</Text>                     <Text dimColor>Chat with it</Text></Text>
+          <Box marginTop={1} />
+          <Text>  <Text color="cyan">B.</Text> <Text color="white">den remote add prod-agent https://...</Text>    <Text dimColor>Register a deployed agent</Text></Text>
+          <Text>  <Text color="cyan">  </Text> <Text color="white">den connect prod-agent</Text>                   <Text dimColor>Chat with it remotely</Text></Text>
         </Box>
       </Box>
     );
@@ -50,6 +67,7 @@ export function AgentList({ agents }: { agents: Agent[] }) {
       {agents.map((agent) => {
         const s = agent.liveStatus;
         const status = !agent.live ? "off" : s?.state === "running" ? "warn" : "ok";
+        const location = locationLabel(agent);
 
         return (
           <Box key={agent.name} paddingLeft={2} marginBottom={0}>
@@ -57,12 +75,12 @@ export function AgentList({ agents }: { agents: Agent[] }) {
             <Box width={22}><Text bold={agent.live}>{agent.name}</Text></Box>
             <Box width={10}>
               <Text color={status === "ok" ? "green" : status === "warn" ? "yellow" : "gray"}>
-                {s?.state || "stopped"}
+                {agent.remote ? (agent.live ? "remote" : "offline") : (s?.state || "stopped")}
               </Text>
             </Box>
             <Box width={24}><Text dimColor={!agent.live}>{(s?.model || "—").slice(0, 22)}</Text></Box>
             <Box width={8}><Text dimColor>{agent.live && s ? formatUptime(s.uptime_seconds) : "—"}</Text></Box>
-            <Box width={7}><Text dimColor>:{agent.port}</Text></Box>
+            <Box width={28}><Text dimColor>{location}</Text></Box>
             {s && (
               <Box>
                 <Text dimColor>{s.memory_count}mem </Text>
@@ -77,7 +95,7 @@ export function AgentList({ agents }: { agents: Agent[] }) {
 
       <Box marginTop={1} paddingLeft={2}>
         <Text dimColor>
-          {agents.length} agent{agents.length !== 1 ? "s" : ""} · {running} running
+          {agents.length} agent{agents.length !== 1 ? "s" : ""} · {running} reachable
         </Text>
       </Box>
     </Box>

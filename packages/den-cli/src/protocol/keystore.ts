@@ -179,9 +179,45 @@ export function getEnvForModel(model: string): Record<string, string> {
 
 export function listKeys(): { provider: string; envVar: string; masked: string }[] {
   const keys = readKeys();
-  return Object.entries(keys).map(([provider, key]) => ({
-    provider,
-    envVar: PROVIDER_ENV_MAP[provider] || `${provider.toUpperCase()}_API_KEY`,
-    masked: key.slice(0, 5) + "•".repeat(8) + key.slice(-4),
-  }));
+  return Object.entries(keys)
+    .filter(([k]) => !k.startsWith("_agent:"))
+    .map(([provider, key]) => ({
+      provider,
+      envVar: PROVIDER_ENV_MAP[provider] || `${provider.toUpperCase()}_API_KEY`,
+      masked: key.slice(0, 5) + "•".repeat(8) + key.slice(-4),
+    }));
+}
+
+// ---------------------------------------------------------------------------
+// Remote agent bearer tokens — stored in the same encrypted keystore under
+// the namespace `_agent:<name>`. Same machine-bound encryption as API keys.
+// ---------------------------------------------------------------------------
+
+const AGENT_PREFIX = "_agent:";
+
+export function saveAgentToken(name: string, token: string): void {
+  const keys = readKeys();
+  keys[AGENT_PREFIX + name] = token;
+  writeKeys(keys);
+}
+
+export function getAgentToken(name: string): string | null {
+  const keys = readKeys();
+  return keys[AGENT_PREFIX + name] ?? null;
+}
+
+export function removeAgentToken(name: string): void {
+  const keys = readKeys();
+  delete keys[AGENT_PREFIX + name];
+  writeKeys(keys);
+}
+
+export function listAgentTokens(): { name: string; masked: string }[] {
+  const keys = readKeys();
+  return Object.entries(keys)
+    .filter(([k]) => k.startsWith(AGENT_PREFIX))
+    .map(([k, v]) => ({
+      name: k.slice(AGENT_PREFIX.length),
+      masked: v.slice(0, 6) + "•".repeat(8) + v.slice(-4),
+    }));
 }
